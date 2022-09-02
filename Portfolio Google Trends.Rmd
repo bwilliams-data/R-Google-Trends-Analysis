@@ -1,0 +1,191 @@
+---
+title: "R Google Trends Equity Analysis Showcase"
+author: "Brenton Williams"
+output: 
+   
+  html_document: 
+    theme: cosmo
+    highlight: pygments
+---
+```{css, echo = FALSE}
+  pre:not([class]) {
+    color: #c5cbe6;
+    background-color: #303443;
+  }
+```
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE)
+```
+
+## Introduction
+This is designed as an example of equity analysis I've conducted looking at correlations of search terms (via Google Trends data) and revenue. The goal is to find strong correlations that allow generation of revenue predictions during a given quarter and before the company actually reports that financial data to the rest of the market.
+<br>
+For this example, **I will predict the revenue that Indian online travel company MakeMyTrip (NASDAQ:MMYT) will report for its fiscal 2021 Q4 by using the Google Trends data of the travel search term "flight".** To accomplish this I will pull the past 4+ years of Google Trends data as well as the historical financials for MMYT.
+
+## Call Packages 
+
+```{r, warning=FALSE, results=FALSE, message=FALSE}
+library(formatR)
+library(ggplot2)
+library(tidyverse)
+library(gtrendsR)
+library(lubridate)
+```
+
+
+## Set The Parameters For Google Trends Data Pull
+```{r}
+#Search Variables 
+#Note that only "flight" will be used in this example
+searchterms <- c("hotel", 
+                 "makemytrip", 
+                 "flight")
+
+#Location and Time
+gtrends_query <- gtrends(searchterms, 
+               geo = "IN",
+               time = "2017-01-01 2021-03-31",
+               gprop = "web",)
+
+```
+
+## Prep Data For Plot 
+```{r warning=FALSE}
+#Extract the search interest data from Google Trends
+ interest <- gtrends_query %>%
+  pluck("interest_over_time") %>% 
+  mutate(hits = as.numeric(hits))
+  
+```
+## Create Visual of Search Interest for Terms
+```{r}
+interest %>% 
+  ggplot(aes(date,hits, color = keyword))+
+    geom_line()+
+    scale_color_manual(values=c("#83c8c7","#936ed1", "#799fcc"))+
+    theme(legend.position = "bottom",
+          legend.background = element_rect(fill="#303443"),
+          legend.key = element_rect(fill = "#303443", colour = "#303443"),
+          legend.title = element_text(colour = "azure"),
+          legend.text = element_text(colour = "azure"),
+          plot.background = element_rect(fill = "#1f212a"),
+          panel.background = element_rect(fill = "#303443"),
+          panel.grid.major = element_line(size = 0.05, linetype = 'solid',
+                                          colour = "#b2b7ce"), 
+          panel.grid.minor = element_line(size = 0.00, linetype = 'solid',
+                                          colour = "#b2b7ce"),
+          plot.title = element_text(colour = "azure"),
+          axis.text = element_text(colour = "azure"),
+          axis.title.x = element_blank(),
+          axis.title.y = element_text(colour = "azure"))+
+    labs(title = "India Search Interest Over Time",
+         x = "Date",
+         y = "Search Interest")
+```
+<br>
+<br>
+The above visual shows the impact of COVID-19 related lock downs during March 2020 having a dramatic impact on travel related search results. Recall that only the search term "flight" will be used for analysis in this example.
+
+## Reshape Google Trends Data For Merging With Financial Data
+```{r}
+#Adjust Google Trends dates for fiscal Quarter Income Statement Data for "flight"
+res <- interest %>%
+        select(date, hits, keyword) %>% 
+        filter(keyword == "flight") %>% 
+        mutate(date = quarter(date, with_year = TRUE, fiscal_start = 4 ))
+
+#Get Average Search Interest by Quarter
+trends_data <- res %>% 
+                group_by(date) %>% 
+                summarize(average_hits = round(mean(hits),2))
+#Sample Output
+as.data.frame(trends_data)
+
+```
+Note that the average_hits during fiscal 2021 Q4 is **39.54**. I'll come back to this value once we are ready to use our model for prediction.
+
+
+## Query/Setup Historical Revenue Data For MakeMyTrip (NASDAQ:MMYT)
+
+```{r}
+#Get Data
+mmyt_fd <- read.csv("/Users/brenton/Documents/Data Portfolio/MMYT Revenue.csv", header = TRUE) 
+
+#Adjust Periods to follow MMYT fiscal periods
+fd <- mmyt_fd %>%
+        mutate(
+              period = ym(period),
+              period = quarter(period, with_year = TRUE, fiscal_start = 4 )) 
+
+#Sample Output
+fd
+
+```
+
+## Join Google Trends Data With Income Statement Financial Data
+```{r}
+merged_data <- trends_data %>% 
+                  inner_join(fd, by = c("date" = "period")) %>% 
+                      arrange(desc(date))
+
+
+#Sample Output
+as.data.frame(merged_data)
+```
+## Look at a Plot of Merged Dataset With Linear Line
+
+```{r}
+merged_data %>% 
+    ggplot(aes(x = average_hits, y = revenue,)) +
+    geom_point(color = "#936ed1") +
+    geom_smooth(method = "lm", se = FALSE, size = .5, color = "royalblue")+
+    theme(
+          plot.background = element_rect(fill = "#1f212a"),
+          panel.background = element_rect(fill = "#303443"),
+          panel.grid.major = element_line(size = 0.05, linetype = 'solid',
+                                          colour = "#b2b7ce"), 
+          panel.grid.minor = element_line(size = 0.00, linetype = 'solid',
+                                          colour = "#b2b7ce"),
+          plot.title = element_text(colour = "azure"),
+          axis.text = element_text(colour = "azure"),
+          axis.title.x = element_text(colour = "azure"),
+          axis.title.y = element_text(colour = "azure"))+
+    labs(title = "Quarterly Revenue vs India Search Interest Over Time",
+         x = "Search Interest",
+         y = "Revenue (Thousands)")
+```
+
+
+## Call Linear Model
+```{r}
+linear_model <- merged_data %>%
+                lm(revenue ~ average_hits,. )
+
+summary(linear_model)
+```
+The result of the linear regressions is an **R^2 of .87** and a **small p-value** (below the standard threshold of .05) indicating a **strong and statistically significant correlation between the "flight" search term and MakeMyTrip's revenue**.
+
+## View Model Prediction and Actuals
+```{r}
+#Add the predicted
+merged_data %>% 
+    mutate(predicted = linear_model$fitted.values) %>% 
+      as.data.frame()
+
+```
+This output shows the revenue MMYT actually reported as well as the predictions for the previous quarters. 
+
+## Predict Revenue for Fiscal 2021 Q4
+```{r}
+#Create data frame to use as value for prediction
+#Recall that 39.54 is the average search interest for fiscal 2021 Q4
+prediction_df <- data.frame(average_hits = 39.54) 
+
+#Predict current quarter revenue
+predict(linear_model, prediction_df )
+```
+
+This output shows a predicted revenue for fiscal 2021 Q4 of 85264.59 using the linear model.
+
+## Conclusion
+From the final above output, the predicted revenue for the latest quarter came in at 85265 and the actual revenue MMYT reported on their earnings report (months after this data was gathered) came in at 79221. This shows how powerful a simple single variable linear model can be as a starting point for building a predictive model. That said, I've built far stronger models in the past by combining multivariate analysis of Google Trends search terms with other publicly accessible data from other sources.
